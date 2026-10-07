@@ -32,15 +32,36 @@ def avisar(texto):
         )
 
 
-def clic(page, patron, paso):
-    """Hace clic en el primer elemento visible cuyo texto coincide con el patrón."""
-    loc = page.get_by_text(re.compile(patron, re.I)).first
-    try:
-        loc.wait_for(state="visible", timeout=30_000)
-    except Exception:
-        raise RuntimeError(f"no encontré el botón '{paso}' en la página")
-    loc.click()
-    page.wait_for_timeout(1500)
+def hay_visible(loc):
+    """True si alguno de los elementos encontrados está visible en pantalla."""
+    for i in range(loc.count()):
+        try:
+            if loc.nth(i).is_visible():
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def clic(page, patron, paso, espera=45):
+    """Hace clic en el primer elemento VISIBLE cuyo texto coincide con el patrón.
+    La página de la DIAN guarda copias ocultas de sus pantallas con los mismos
+    textos, por eso se ignoran los elementos invisibles."""
+    regex = re.compile(patron, re.I)
+    fin = time.time() + espera
+    while time.time() < fin:
+        candidatos = page.get_by_text(regex)
+        for i in range(candidatos.count()):
+            c = candidatos.nth(i)
+            try:
+                if c.is_visible():
+                    c.click(timeout=5_000)
+                    page.wait_for_timeout(2000)
+                    return
+            except Exception:
+                pass
+        page.wait_for_timeout(1000)
+    raise RuntimeError(f"no encontré el botón '{paso}' en la página")
 
 
 def selectores_de_ciudad(page):
@@ -72,7 +93,7 @@ def revisar():
             # Esperar hasta 20 s a que aparezca el modal (sin citas) o el selector de ciudad (hay citas)
             fin = time.time() + 20
             while time.time() < fin:
-                if page.get_by_text(SIN_CITAS).first.is_visible():
+                if hay_visible(page.get_by_text(SIN_CITAS)):
                     return "sin_citas"
                 if selectores_de_ciudad(page) > antes:
                     return "hay_citas"

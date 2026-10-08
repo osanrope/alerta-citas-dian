@@ -18,8 +18,8 @@ concurrency:
 
 jobs:
   revisar:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
@@ -28,9 +28,10 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar dependencias
+        timeout-minutes: 3
         run: |
           pip install playwright requests
-          python -m playwright install --with-deps chromium
+          python -m playwright install chromium --only-shell
 
       - name: Recuperar memoria de la revisión anterior
         uses: actions/cache/restore@v4
@@ -40,6 +41,7 @@ jobs:
           restore-keys: estado-
 
       - name: Revisar disponibilidad
+        timeout-minutes: 3
         run: python check_citas.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}

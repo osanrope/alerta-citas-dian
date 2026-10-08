@@ -48,10 +48,11 @@ jobs:
           PROBAR_LLAMADA: ${{ inputs.probar_llamada }}
           # "1" = avisa también cuando NO hay citas (modo prueba)
           AVISAR_SIEMPRE: "0"
-          # Mientras las citas sigan disponibles:
-          RECORDATORIO_MIN: "5"    # un mensaje cada 5 minutos
-          LLAMADA_CADA_MIN: "15"   # una llamada cada 15 minutos
-          MAX_LLAMADAS: "3"        # máximo 3 llamadas por aparición
+          LLAMADAS: "0"            # "1" = también hacer llamada de Telegram
+          LATIDO_MIN: "5"          # mensaje "sigo revisando" cada 5 minutos
+          RECORDATORIO_MIN: "1"    # recordatorio cada minuto mientras haya citas
+          LLAMADA_CADA_MIN: "15"   # (solo si LLAMADAS es "1")
+          MAX_LLAMADAS: "3"        # (solo si LLAMADAS es "1")
 
       - name: Guardar memoria para la próxima revisión
         if: always() && hashFiles('estado.json') != ''

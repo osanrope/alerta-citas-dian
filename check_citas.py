@@ -11,6 +11,8 @@ Variables de entorno (se configuran en citas.yml y en los Secrets de GitHub):
   RECORDATORIO_MIN   minutos entre recordatorios mientras sigan las citas (5)
   LLAMADA_CADA_MIN   minutos entre llamadas mientras sigan las citas (15)
   MAX_LLAMADAS       llamadas máximas por cada aparición de citas (3)
+  LLAMADAS=1         activa las llamadas (0 = solo mensajes)
+  LATIDO_MIN         cada cuántos minutos enviar "sigo revisando, sin citas" (5; 0 = nunca)
   VER=1              abre el navegador visible, para probar en tu PC
 
 Memoria entre ejecuciones: estado.json (GitHub lo guarda con actions/cache).
@@ -36,9 +38,12 @@ SIN_CITAS = re.compile(r"no se encontraron especialidades", re.I)
 ESTADO = "estado.json"
 BOGOTA = ZoneInfo("America/Bogota")
 
-RECORDATORIO_MIN = float(os.getenv("RECORDATORIO_MIN") or 5)
+RECORDATORIO_MIN = float(os.getenv("RECORDATORIO_MIN") or 1)
 LLAMADA_CADA_MIN = float(os.getenv("LLAMADA_CADA_MIN") or 15)
 MAX_LLAMADAS = int(os.getenv("MAX_LLAMADAS") or 3)
+LLAMADAS = os.getenv("LLAMADAS", "1") == "1"
+LATIDO_MIN = float(os.getenv("LATIDO_MIN") or 5)
+HOLGURA = 20  # segundos de tolerancia: las revisiones no caen exactas cada minuto
 ERROR_AVISO_MIN = 30  # como máximo un aviso de error cada 30 min
 
 
@@ -114,6 +119,8 @@ def llamar(texto):
 
 
 def llamar_en_segundo_plano(texto):
+    if not LLAMADAS:
+        return None
     h = threading.Thread(target=llamar, args=(texto,), daemon=True)
     h.start()
     return h
@@ -290,8 +297,32 @@ def revisar():
 
 
 # ---------------------------------------------------------------- decisión
+def latido(est, ahora, ok):
+    """Cuenta revisiones y cada LATIDO_MIN avisa que sigue funcionando sin citas."""
+    if LATIDO_MIN <= 0:
+        return
+    if not est.get("latido_inicio"):
+        est.update(latido_inicio=ahora, revisiones_ok=0, revisiones_fallidas=0)
+    est["revisiones_ok" if ok else "revisiones_fallidas"] = \
+        est.get("revisiones_ok" if ok else "revisiones_fallidas", 0) + 1
+    if ahora - est["latido_inicio"] >= LATIDO_MIN * 60 - HOLGURA:
+        total = est["revisiones_ok"] + est["revisiones_fallidas"]
+        texto = (f"🟢 Sigo revisando. Verifiqué {total} veces entre las "
+                 f"{hora(est['latido_inicio'])} y las {hora(ahora)}: no hubo citas.")
+        if est["revisiones_fallidas"]:
+            texto += f" ({est['revisiones_fallidas']} de esas revisiones no se pudieron completar.)"
+        avisar(texto)
+        est.update(latido_inicio=ahora, revisiones_ok=0, revisiones_fallidas=0)
+
+
+def reiniciar_latido(est):
+    for k in ("latido_inicio", "revisiones_ok", "revisiones_fallidas"):
+        est.pop(k, None)
+
+
 def manejar_problema(est, texto, ahora):
     """Errores: avisa en el 2.º fallo seguido y luego máximo cada 30 min."""
+    latido(est, ahora, ok=False)
     est["errores_seguidos"] = est.get("errores_seguidos", 0) + 1
     ultimo = est.get("ultimo_aviso_error", 0)
     if est["errores_seguidos"] >= 2 and ahora - ultimo >= ERROR_AVISO_MIN * 60:
@@ -335,17 +366,20 @@ def main():
             avisar(f"🔚 Las citas de Devoluciones ya no aparecen. "
                    f"Estuvieron visibles unos {max(minutos, 1)} min "
                    f"(desde las {hora(est['episodio_inicio'])}).")
-            est = {"errores_seguidos": 0}
+            for k in ("episodio_inicio", "ultimo_mensaje", "ultima_llamada", "llamadas", "silenciado"):
+                est.pop(k, None)
         elif os.getenv("AVISAR_SIEMPRE") == "1":
             avisar("❌ Revisé la DIAN: por ahora NO hay citas de Devoluciones.")
         else:
             print("Sin citas por ahora.")
+        latido(est, ahora, ok=True)
         guardar_estado(est)
         return
 
     # ---- Hay citas
     lista = "\n".join(f"• {t}" for t in tramites) if tramites else "(no pude leer la lista de trámites; mira la foto)"
     nuevo = not est.get("episodio_inicio")
+    reiniciar_latido(est)
 
     if nuevo:
         est.update(episodio_inicio=ahora, ultimo_mensaje=ahora, ultima_llamada=ahora,
@@ -355,7 +389,8 @@ def main():
                           f"Trámites:\n{lista}\n\n"
                           f"Responde «listo» para dejar de recibir recordatorios de estas citas.")
         guardar_estado(est)
-        hilo.join(timeout=90)
+        if hilo:
+            hilo.join(timeout=90)
         return
 
     # Las citas siguen disponibles desde una revisión anterior.
@@ -370,12 +405,12 @@ def main():
 
     minutos = round((ahora - est["episodio_inicio"]) / 60)
     hilo = None
-    if (est.get("llamadas", 0) < MAX_LLAMADAS
-            and ahora - est.get("ultima_llamada", 0) >= LLAMADA_CADA_MIN * 60):
+    if (LLAMADAS and est.get("llamadas", 0) < MAX_LLAMADAS
+            and ahora - est.get("ultima_llamada", 0) >= LLAMADA_CADA_MIN * 60 - HOLGURA):
         est["llamadas"] = est.get("llamadas", 0) + 1
         est["ultima_llamada"] = ahora
         hilo = llamar_en_segundo_plano("Recordatorio. Siguen habiendo citas de devoluciones en la DIAN.")
-    if ahora - est.get("ultimo_mensaje", 0) >= RECORDATORIO_MIN * 60:
+    if ahora - est.get("ultimo_mensaje", 0) >= RECORDATORIO_MIN * 60 - HOLGURA:
         est["ultimo_mensaje"] = ahora
         avisar(f"⏰ Siguen las citas de Devoluciones (llevan unos {minutos} min). {URL}\n\n"
                f"Trámites:\n{lista}\n\nResponde «listo» para silenciar.")

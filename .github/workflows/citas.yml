@@ -2,9 +2,19 @@ name: Revisar citas DIAN
 
 on:
   schedule:
-    # Cada 15 min entre 6:00 a. m. y 10:59 p. m. hora Colombia (cron va en UTC)
+    # Respaldo por si falla el despertador de cron-job.org (hora UTC)
     - cron: "*/15 11-23,0-3 * * *"
-  workflow_dispatch: # botón "Run workflow" para probar a mano
+  workflow_dispatch:
+    inputs:
+      probar_llamada:
+        description: "Solo hacer una llamada de prueba"
+        type: boolean
+        default: false
+
+# Nunca corren dos revisiones al tiempo: así la memoria no se pisa
+concurrency:
+  group: revisar-citas
+  cancel-in-progress: false
 
 jobs:
   revisar:
@@ -22,16 +32,35 @@ jobs:
           pip install playwright requests
           python -m playwright install --with-deps chromium
 
+      - name: Recuperar memoria de la revisión anterior
+        uses: actions/cache/restore@v4
+        with:
+          path: estado.json
+          key: estado-${{ github.run_id }}
+          restore-keys: estado-
+
       - name: Revisar disponibilidad
         run: python check_citas.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Modo prueba: "1" = avisa también cuando NO hay citas.
-          # Cuando termines de probar, cámbialo a "0".
-          AVISAR_SIEMPRE: "1"
+          TELEGRAM_USER: ${{ secrets.TELEGRAM_USER }}
+          PROBAR_LLAMADA: ${{ inputs.probar_llamada }}
+          # "1" = avisa también cuando NO hay citas (modo prueba)
+          AVISAR_SIEMPRE: "0"
+          # Mientras las citas sigan disponibles:
+          RECORDATORIO_MIN: "5"    # un mensaje cada 5 minutos
+          LLAMADA_CADA_MIN: "15"   # una llamada cada 15 minutos
+          MAX_LLAMADAS: "3"        # máximo 3 llamadas por aparición
 
-      - name: Guardar capturas si algo falló
+      - name: Guardar memoria para la próxima revisión
+        if: always() && hashFiles('estado.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: estado.json
+          key: estado-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Guardar capturas
         if: always()
         uses: actions/upload-artifact@v4
         with:

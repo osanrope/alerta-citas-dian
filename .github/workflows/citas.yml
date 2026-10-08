@@ -13,7 +13,7 @@ on:
 
 # Nunca corren dos revisiones al tiempo: así la memoria no se pisa
 concurrency:
-  group: revisar-citas
+  group: revisar-citas-${{ inputs.probar_llamada && 'prueba' || 'normal' }}
   cancel-in-progress: false
 
 jobs:

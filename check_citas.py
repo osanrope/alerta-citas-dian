@@ -314,6 +314,42 @@ def leer_tramites(page):
     return []
 
 
+ETIQUETA_TRAMITE = re.compile(r"^\s*tr[aá]mites?\s*:?\s*\*?\s*$", re.I)
+
+
+def preparar_foto(page):
+    """Deja la lista de trámites a la vista antes de tomar la foto."""
+    try:
+        page.set_viewport_size({"width": 1280, "height": 1800})  # ventana más alta
+        page.wait_for_timeout(800)
+    except Exception as ex:
+        print("No pude agrandar la ventana:", ex)
+    try:
+        # Los desplegables estándar no salen abiertos en las fotos: se muestran como lista expandida.
+        page.evaluate("""() => {
+          for (const s of document.querySelectorAll('select')) {
+            const r = s.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0 && s.options.length > 1) {
+              s.size = Math.min(s.options.length, 20);
+              s.style.height = 'auto';
+              s.style.maxHeight = 'none';
+            }
+          }
+        }""")
+    except Exception as ex:
+        print("No pude expandir la lista:", ex)
+    try:
+        etiquetas = page.get_by_text(ETIQUETA_TRAMITE)
+        for i in range(etiquetas.count()):
+            et = etiquetas.nth(i)
+            if et.is_visible():
+                et.evaluate("e => e.scrollIntoView({block: 'start'})")
+                page.wait_for_timeout(500)
+                break
+    except Exception as ex:
+        print("No pude bajar hasta la lista de trámites:", ex)
+
+
 def revisar():
     """Devuelve (estado, tramites, ruta_foto). estado: sin_citas | hay_citas | desconocido."""
     with sync_playwright() as p:
@@ -334,7 +370,9 @@ def revisar():
                     return "sin_citas", [], None
                 if senales_de_citas(page) > antes:
                     page.wait_for_timeout(1000)
+                    preparar_foto(page)
                     tramites = leer_tramites(page)
+                    page.wait_for_timeout(500)
                     page.screenshot(path="citas.png", full_page=True)
                     return "hay_citas", tramites, "citas.png"
                 page.wait_for_timeout(1000)

@@ -4,7 +4,7 @@ y avisa por Telegram (mensaje + foto + llamada) cuando las hay.
 
 Variables de entorno (se configuran en citas.yml y en los Secrets de GitHub):
   TELEGRAM_TOKEN     token del bot (de @BotFather)
-  TELEGRAM_CHAT_ID   tu número de chat
+  TELEGRAM_CHAT_ID   número(s) de chat; para varias personas, separados por coma: 111,222,333
   TELEGRAM_USER      tu usuario de Telegram (@...) para la llamada de CallMeBot
   AVISAR_SIEMPRE=1   avisa también cuando NO hay citas (modo prueba)
   PROBAR_LLAMADA=true  solo hace una llamada de prueba y termina
@@ -38,7 +38,8 @@ from playwright.sync_api import sync_playwright
 
 URL = "https://agendamiento.dian.gov.co"
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHAT_IDS = [c.strip() for c in (os.getenv("TELEGRAM_CHAT_ID") or "").replace(";", ",").split(",") if c.strip()]
+CHAT_ID = CHAT_IDS[0] if CHAT_IDS else None  # compatibilidad
 TG_USER = (os.getenv("TELEGRAM_USER") or "").strip()
 SIN_CITAS = re.compile(r"no se encontraron especialidades", re.I)
 ESTADO = "estado.json"
@@ -73,37 +74,48 @@ def guardar_estado(e):
         json.dump(e, f, ensure_ascii=False, indent=2)
 
 
+def _enviar_texto(chat, texto):
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": chat, "text": texto},
+            timeout=20,
+        )
+        if not r.ok:
+            print(f"Telegram rechazó el mensaje para {chat}:", r.text[:200])
+    except Exception as ex:
+        print(f"No pude enviar el mensaje a {chat}:", ex)
+
+
 def avisar(texto):
+    """Envía el mensaje a todas las cuentas configuradas."""
     print(texto)
-    if TOKEN and CHAT_ID:
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                data={"chat_id": CHAT_ID, "text": texto},
-                timeout=20,
-            )
-        except Exception as ex:
-            print("No pude enviar el mensaje:", ex)
+    if not TOKEN:
+        return
+    for chat in CHAT_IDS:
+        _enviar_texto(chat, texto)
 
 
 def enviar_foto(ruta, texto):
-    """Envía una foto con texto; si falla, envía solo el texto."""
+    """Envía una foto con texto a todas las cuentas; si la foto falla, envía solo el texto."""
     print(texto)
-    if not (TOKEN and CHAT_ID):
+    if not TOKEN:
         return
-    try:
-        with open(ruta, "rb") as f:
-            r = requests.post(
-                f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-                data={"chat_id": CHAT_ID, "caption": texto[:1000]},
-                files={"photo": f},
-                timeout=30,
-            )
-        if r.ok:
-            return
-    except Exception as ex:
-        print("No pude enviar la foto:", ex)
-    avisar(texto)
+    for chat in CHAT_IDS:
+        enviada = False
+        try:
+            with open(ruta, "rb") as f:
+                r = requests.post(
+                    f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+                    data={"chat_id": chat, "caption": texto[:1000]},
+                    files={"photo": f},
+                    timeout=30,
+                )
+            enviada = r.ok
+        except Exception as ex:
+            print(f"No pude enviar la foto a {chat}:", ex)
+        if not enviada:
+            _enviar_texto(chat, texto)
 
 
 def llamar(texto):
@@ -151,7 +163,7 @@ def normalizar(texto):
 
 def leer_comandos(est):
     """Lee los mensajes nuevos que le escribiste al bot y devuelve la lista de comandos, en orden."""
-    if not (TOKEN and CHAT_ID):
+    if not (TOKEN and CHAT_IDS):
         return []
     comandos = []
     try:
@@ -162,7 +174,7 @@ def leer_comandos(est):
         for u in r.json().get("result", []):
             est["ultimo_update"] = max(est.get("ultimo_update", 0), u.get("update_id", 0))
             m = u.get("message") or {}
-            if str(m.get("chat", {}).get("id")) != str(CHAT_ID):
+            if str(m.get("chat", {}).get("id")) not in CHAT_IDS:
                 continue
             t = normalizar(m.get("text", ""))
             for nombre, palabras in COMANDOS.items():
